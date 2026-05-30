@@ -75,3 +75,30 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .poem p { animation: none; opacity: 1; }
 }
+
+/* debug toggle in the corner — also opts in to device-orientation tilt */
+.debug-toggle {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: rgba(60, 70, 80, 0.7);
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.debug-toggle input {
+  cursor: pointer;
+  margin: 0;
+  accent-color: rgba(60, 70, 80, 0.7);
+}

@@ -59,6 +59,64 @@ window.addEventListener("pointerup", (e) => {
 });
 window.addEventListener("pointercancel", () => (gaze.active = false));
 
+// --- tilt (debug / prototype) --------------------------------------------
+//
+// A sketch for the Settle fold: when debug is on, deviceorientation drives
+// a tilt vector that biases each floater's home drift, so the field gently
+// flows toward "down" as you tip the phone. The compass overlay in the
+// corner shows the live tilt. Once #8 lands this moves into a proper
+// input/orientation module behind the Behavior interface.
+
+const debugToggle = document.getElementById("debug-toggle");
+const tilt = { x: 0, y: 0, calibrated: null, receiving: false };
+let debug = false;
+
+const TILT_RANGE = 30;   // degrees mapped to a unit on each axis
+const TILT_FORCE = 0.6;  // drift-velocity contribution at |tilt| = 1, depth = 1
+
+function onOrientation(e) {
+  if (e.beta == null || e.gamma == null) return;
+  // First reading defines "neutral" — however you're holding the phone now
+  // becomes rest, so any motion from here reads as tilt.
+  if (tilt.calibrated === null) {
+    tilt.calibrated = { beta: e.beta, gamma: e.gamma };
+  }
+  const dx = e.gamma - tilt.calibrated.gamma; // left/right
+  const dy = e.beta  - tilt.calibrated.beta;  // front/back pitch
+  tilt.x = Math.max(-1, Math.min(1, dx / TILT_RANGE));
+  tilt.y = Math.max(-1, Math.min(1, dy / TILT_RANGE));
+  tilt.receiving = true;
+}
+
+async function enableTilt() {
+  // iOS 13+ requires explicit permission from a user gesture; the change
+  // event on the checkbox counts. Other browsers just attach the listener.
+  if (typeof DeviceOrientationEvent !== "undefined" &&
+      typeof DeviceOrientationEvent.requestPermission === "function") {
+    try {
+      const result = await DeviceOrientationEvent.requestPermission();
+      if (result !== "granted") return;
+    } catch {
+      return;
+    }
+  }
+  window.addEventListener("deviceorientation", onOrientation);
+}
+
+function disableTilt() {
+  window.removeEventListener("deviceorientation", onOrientation);
+  tilt.x = 0;
+  tilt.y = 0;
+  tilt.calibrated = null;
+  tilt.receiving = false;
+}
+
+debugToggle.addEventListener("change", async () => {
+  debug = debugToggle.checked;
+  if (debug) await enableTilt();
+  else disableTilt();
+});
+
 // --- floaters ------------------------------------------------------------
 
 // Eye floaters come in a few recognisable shapes: lone blobs, strands of
@@ -164,9 +222,13 @@ class Floater {
       }
     }
 
-    // ease back toward the home drift so they always resettle
-    this.vx += (this.dvx - this.vx) * 0.02;
-    this.vy += (this.dvy - this.vy) * 0.02;
+    // ease back toward the home drift so they always resettle; tilt nudges
+    // the whole field in the direction of gravity, scaled by depth so
+    // nearer floaters move more (matches the parallax).
+    const targetVx = this.dvx + tilt.x * TILT_FORCE * this.depth;
+    const targetVy = this.dvy + tilt.y * TILT_FORCE * this.depth;
+    this.vx += (targetVx - this.vx) * 0.02;
+    this.vy += (targetVy - this.vy) * 0.02;
 
     this.x += this.vx * dt * 0.06;
     this.y += this.vy * dt * 0.06;
@@ -253,6 +315,70 @@ function drawVignette() {
   ctx.fillRect(0, 0, width, height);
 }
 
+function drawDebugArrow() {
+  // sits below the debug checkbox in the top-right corner
+  const radius = 32;
+  const cx = width - radius - 18;
+  const cy = 18 + 28 + radius;
+
+  ctx.save();
+
+  // compass face
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(60, 70, 80, 0.3)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // center crosshair
+  ctx.beginPath();
+  ctx.moveTo(cx - 3, cy); ctx.lineTo(cx + 3, cy);
+  ctx.moveTo(cx, cy - 3); ctx.lineTo(cx, cy + 3);
+  ctx.strokeStyle = "rgba(60, 70, 80, 0.35)";
+  ctx.stroke();
+
+  // arrow proportional to tilt magnitude
+  const ex = cx + tilt.x * radius;
+  const ey = cy + tilt.y * radius;
+  const mag = Math.hypot(tilt.x, tilt.y);
+  if (mag > 0.02) {
+    ctx.strokeStyle = "rgba(60, 70, 80, 0.85)";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+
+    const angle = Math.atan2(ey - cy, ex - cx);
+    const head = 7;
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - head * Math.cos(angle - Math.PI / 6),
+               ey - head * Math.sin(angle - Math.PI / 6));
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - head * Math.cos(angle + Math.PI / 6),
+               ey - head * Math.sin(angle + Math.PI / 6));
+    ctx.stroke();
+  }
+
+  // numeric readout
+  ctx.font = "10px ui-monospace, Menlo, Consolas, monospace";
+  ctx.fillStyle = "rgba(60, 70, 80, 0.55)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText(
+    tilt.receiving
+      ? `${tilt.x.toFixed(2)}, ${tilt.y.toFixed(2)}`
+      : "(no tilt)",
+    cx, cy + radius + 6
+  );
+
+  ctx.restore();
+}
+
 // --- loop ----------------------------------------------------------------
 
 let last = performance.now();
@@ -267,6 +393,7 @@ function frame(now) {
   for (const f of floaters) f.draw();
   drawGaze();
   drawVignette();
+  if (debug) drawDebugArrow();
 
   requestAnimationFrame(frame);
 }
